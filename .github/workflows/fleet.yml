@@ -144,5 +144,6 @@ jobs:
         if: github.event.issue.number != '' || inputs.issue != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
         run: gh issue comment "$ISSUE" --body-file fleet-report.md
