@@ -77,10 +77,12 @@ jobs:
       - name: start navette
         if: steps.target.outputs.idle == '0'
         run: |
-          docker run -d --name navette -p 8765:8765 ghcr.io/slabbdev/navette:latest serve --port 8765
-          for i in $(seq 1 60); do
+          # navette binds loopback only (no --bind flag), so the container
+          # shares the host network namespace and is reached on 127.0.0.1.
+          docker run -d --name navette --network host ghcr.io/slabbdev/navette:latest serve --port 8765
+          for i in $(seq 1 90); do
             curl -sf -m 5 http://127.0.0.1:8765/health >/dev/null && exit 0
-            sleep 2
+            sleep 3
           done
           docker logs navette
           exit 1
@@ -132,7 +134,7 @@ jobs:
             jq -r 'def e: if .=="OK" then "🟢 OK" elif .=="WALL" then "🟠 WALL" elif .=="ERROR" then "🔴 ERROR" else "⚪ IDLE" end;
                    .[] | "| \(.scout) | `\(.target)` | \(e) | \(.title) | \(.note) |"' scouts/all.json
             echo
-            jq -r 'group_by(.status)[] | "- \.[0].status: \(.length)"' scouts/all.json
+            jq -r 'group_by(.status)[] | "  - \(.[0].status): \(.length)"' scouts/all.json
             echo
             echo "Screenshots and full page extracts: download the \`scout-N\` artifacts of this run."
           } > fleet-report.md
