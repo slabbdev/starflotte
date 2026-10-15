@@ -1,0 +1,146 @@
+name: fleet
+
+# A mission is a URL list. Two ways to launch one:
+#   1. open an issue whose body lists target URLs (one per line) and label it `mission`
+#   2. dispatch this workflow with the `issue` number, or raw `urls` for a smoke test
+# Twenty scouts run in parallel (the free-plan concurrency cap). Scout k checks
+# target k. When there are fewer targets than scouts, the extra scouts report
+# IDLE. A summary job aggregates every scout into ONE report, posted back on
+# the mission issue (or the run summary for smoke tests).
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Issue number carrying the mission (URL list in the body)'
+        required: false
+        default: ''
+      urls:
+        description: 'Comma-separated URLs — smoke test without an issue'
+        required: false
+        default: ''
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scout:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'mission'
+    name: scout ${{ matrix.scout }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        scout: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: resolve mission
+        id: mission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          URLS: ${{ inputs.urls }}
+        run: |
+          mkdir -p work
+          if [ -n "$URLS" ]; then
+            printf '%s\n' "$URLS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' > work/targets.txt
+          elif [ -n "$ISSUE" ]; then
+            gh issue view "$ISSUE" --json body -q .body > work/body.md
+            grep -oE 'https?://[^[:space:])"<>]+' work/body.md | awk '!seen[$0]++' > work/targets.txt
+          else
+            echo "No issue number and no urls input — nothing to do." >&2
+            printf 'targets=0\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf 'targets=%s\n' "$(wc -l < work/targets.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: pick this scout's target
+        id: target
+        env:
+          SCOUT: ${{ matrix.scout }}
+        run: |
+          N=$(wc -l < work/targets.txt 2>/dev/null | tr -d ' ' || echo 0)
+          if [ "${N:-0}" -eq 0 ] || [ "$SCOUT" -gt "$N" ]; then
+            echo "idle=1" >> "$GITHUB_OUTPUT"
+            jq -n --arg s "$SCOUT" '{scout:$s,target:"",status:"IDLE",title:"",final_url:"",bytes:0,note:"more scouts than targets"}' > "work/result-$SCOUT.json"
+          else
+            echo "idle=0" >> "$GITHUB_OUTPUT"
+            echo "url=$(sed -n "${SCOUT}p" work/targets.txt)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: start navette
+        if: steps.target.outputs.idle == '0'
+        run: |
+          docker run -d --name navette -p 8765:8765 ghcr.io/slabbdev/navette:latest serve --port 8765
+          for i in $(seq 1 60); do
+            curl -sf -m 5 http://127.0.0.1:8765/health >/dev/null && exit 0
+            sleep 2
+          done
+          docker logs navette
+          exit 1
+
+      - name: run the mission
+        if: steps.target.outputs.idle == '0'
+        env:
+          SCOUT: ${{ matrix.scout }}
+          URL: ${{ steps.target.outputs.url }}
+        run: bash scripts/scout.sh
+
+      - name: upload scout artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scout-${{ matrix.scout }}
+          path: work/
+          retention-days: 7
+
+  summary:
+    needs: [scout]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: scout-*
+          merge-multiple: true
+          path: scouts/
+
+      - name: build the fleet report
+        env:
+          SCOUTS: 20
+        run: |
+          for i in $(seq 1 "$SCOUTS"); do
+            if [ ! -f "scouts/result-$i.json" ]; then
+              jq -n --arg s "$i" '{scout:$s,target:"",status:"ERROR",title:"",final_url:"",bytes:0,note:"no result — scout job failed"}' > "scouts/result-$i.json"
+            fi
+          done
+          jq -s 'sort_by(.scout|tonumber)' scouts/result-*.json > scouts/all.json
+          {
+            echo "## Fleet report"
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} · $SCOUTS scouts · $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo
+            echo "| Scout | Target | Status | Title | Note |"
+            echo "|---|---|---|---|---|"
+            jq -r 'def e: if .=="OK" then "🟢 OK" elif .=="WALL" then "🟠 WALL" elif .=="ERROR" then "🔴 ERROR" else "⚪ IDLE" end;
+                   .[] | "| \(.scout) | `\(.target)` | \(e) | \(.title) | \(.note) |"' scouts/all.json
+            echo
+            jq -r 'group_by(.status)[] | "- \.[0].status: \(.length)"' scouts/all.json
+            echo
+            echo "Screenshots and full page extracts: download the \`scout-N\` artifacts of this run."
+          } > fleet-report.md
+          cat fleet-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: post the report on the mission issue
+        if: github.event.issue.number != '' || inputs.issue != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+        run: gh issue comment "$ISSUE" --body-file fleet-report.md
