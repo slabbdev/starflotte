@@ -8,3 +8,6 @@ Checking your browser
 Press & Hold
 un moment
 verifying you are human
+Your Browsing Activity
+Error Page
+Sorry...

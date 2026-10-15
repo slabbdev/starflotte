@@ -50,11 +50,21 @@ jobs:
           mkdir -p work
           if [ -n "$URLS" ]; then
             printf '%s\n' "$URLS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' > work/targets.txt
+            printf 'mode=url\n' >> "$GITHUB_OUTPUT"
           elif [ -n "$ISSUE" ]; then
             gh issue view "$ISSUE" --json body -q .body > work/body.md
+            # a task mission carries a json fenced block with an array of task objects
+            awk '/^```json/{f=1;next} f && /^```[[:space:]]*$/{f=0} f' work/body.md > work/tasks.json || true
+            if [ -s work/tasks.json ] && jq -e 'type=="array" and length>0' work/tasks.json >/dev/null 2>&1; then
+              printf 'mode=task\n' >> "$GITHUB_OUTPUT"
+              printf 'targets=%s\n' "$(jq 'length' work/tasks.json)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             grep -oE 'https?://[^[:space:])"<>]+' work/body.md | awk '!seen[$0]++' > work/targets.txt
+            printf 'mode=url\n' >> "$GITHUB_OUTPUT"
           else
             echo "No issue number and no urls input — nothing to do." >&2
+            printf 'mode=url\n' >> "$GITHUB_OUTPUT"
             printf 'targets=0\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -64,11 +74,16 @@ jobs:
         id: target
         env:
           SCOUT: ${{ matrix.scout }}
+          MODE: ${{ steps.mission.outputs.mode }}
         run: |
-          N=$(wc -l < work/targets.txt 2>/dev/null | tr -d ' ' || echo 0)
+          N=${{ steps.mission.outputs.targets }}
           if [ "${N:-0}" -eq 0 ] || [ "$SCOUT" -gt "$N" ]; then
             echo "idle=1" >> "$GITHUB_OUTPUT"
             jq -n --arg s "$SCOUT" '{scout:$s,target:"",status:"IDLE",title:"",final_url:"",bytes:0,note:"more scouts than targets"}' > "work/result-$SCOUT.json"
+          elif [ "$MODE" = "task" ]; then
+            echo "idle=0" >> "$GITHUB_OUTPUT"
+            jq -c --argjson k "$SCOUT" '.[$k-1]' work/tasks.json > "work/task-$SCOUT.json"
+            echo "url=$(jq -r '.url' "work/task-$SCOUT.json")" >> "$GITHUB_OUTPUT"
           else
             echo "idle=0" >> "$GITHUB_OUTPUT"
             echo "url=$(sed -n "${SCOUT}p" work/targets.txt)" >> "$GITHUB_OUTPUT"
@@ -92,6 +107,7 @@ jobs:
         env:
           SCOUT: ${{ matrix.scout }}
           URL: ${{ steps.target.outputs.url }}
+          TASK: ${{ steps.mission.outputs.mode == 'task' && '1' || '' }}
         run: bash scripts/scout.sh
 
       - name: upload scout artifacts
@@ -135,6 +151,13 @@ jobs:
                    .[] | "| \(.scout) | `\(.target)` | \(e) | \(.title) | \(.note) |"' scouts/all.json
             echo
             jq -r 'group_by(.status)[] | . as $g | "  - \($g[0].status): \($g|length)"' scouts/all.json
+            echo
+            # task missions: show what the scouts came back with
+            if jq -e '.[] | select(.extract != null and .extract != "")' scouts/all.json >/dev/null 2>&1; then
+              echo "## Task results"
+              echo
+              jq -r '.[] | select(.extract != null and .extract != "") | "### Scout \(.scout) — \(.name // .target)\n\n```\n\(.extract[0:600])\n```\n"' scouts/all.json
+            fi
             echo
             echo "Screenshots and full page extracts: download the \`scout-N\` artifacts of this run."
           } > fleet-report.md

@@ -18,6 +18,36 @@ Or run it manually from the Actions tab: `workflow_dispatch` with an issue
 number, or raw comma-separated `urls` for a smoke test (report lands in the
 run summary instead of an issue).
 
+## Task missions — ask the fleet to DO something
+
+A mission issue can carry a json fenced block instead of a plain URL list.
+Each object is one scout's task: an optional ordered `steps` list of navette
+calls, and an `extract` JS expression whose result lands in the fleet report.
+
+````
+```json
+[
+  {
+    "name": "RIPE whois IP",
+    "url": "https://apps.db.ripe.net/db-web-ui/query",
+    "steps": [
+      {"type": {"selector": "#searchInput", "value": "140.82.121.4"}},
+      {"evaluate": {"js": "(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.innerText.trim()==='Search'); b.click(); return 1;})()"}},
+      {"sleep": {"ms": 8000}}
+    ],
+    "extract": "document.body.innerText.split('Search results')[1]?.slice(0,900) || 'no results'"
+  }
+]
+```
+````
+
+Steps are sent to the daemon verbatim as `{"route": {payload}}` — everything
+the navette HTTP API accepts works (`type`, `click`, `key`, `hover`, `scroll`,
+`evaluate`, `wait`). Timed pauses use the `sleep` pseudo-route (the daemon's
+`/wait` is selector-only); 30 s cap per sleep. A task with no `steps` is just
+a navigate + extract, which covers GET-param queries
+(`crt.sh/?q=…`, `html.duckduckgo.com/html/?q=…`, Wayback snapshot URLs).
+
 ## What each scout does
 
 Scout *k* takes target *k*. It boots the multi-arch `ghcr.io/slabbdev/navette`
