@@ -13,3 +13,4 @@ Error Page
 Sorry...
 Bad Gateway
 Service Unavailable
+404 Not Found
