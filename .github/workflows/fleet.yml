@@ -131,10 +131,10 @@ jobs:
             echo
             echo "| Scout | Target | Status | Title | Note |"
             echo "|---|---|---|---|---|"
-            jq -r 'def e: if .=="OK" then "🟢 OK" elif .=="WALL" then "🟠 WALL" elif .=="ERROR" then "🔴 ERROR" else "⚪ IDLE" end;
+            jq -r 'def e: if .status=="OK" then "🟢 OK" elif .status=="WALL" then "🟠 WALL" elif .status=="ERROR" then "🔴 ERROR" else "⚪ IDLE" end;
                    .[] | "| \(.scout) | `\(.target)` | \(e) | \(.title) | \(.note) |"' scouts/all.json
             echo
-            jq -r 'group_by(.status)[] | "  - \(.[0].status): \(.length)"' scouts/all.json
+            jq -r 'group_by(.status)[] | . as $g | "  - \($g[0].status): \($g|length)"' scouts/all.json
             echo
             echo "Screenshots and full page extracts: download the \`scout-N\` artifacts of this run."
           } > fleet-report.md
