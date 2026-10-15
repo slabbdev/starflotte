@@ -11,3 +11,5 @@ verifying you are human
 Your Browsing Activity
 Error Page
 Sorry...
+Bad Gateway
+Service Unavailable
