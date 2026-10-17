@@ -76,3 +76,27 @@ artifacts and posts ONE report table on the mission issue.
 - Scheduled runs are approximate (cron on Actions drifts) and workflows get
   disabled after 60 days of repo inactivity.
 - Everything is ephemeral: no cookies, no sessions, no state between runs.
+
+## Authenticated missions (Voie B — session cookies)
+
+Anonymous runners see public pages only. To run authenticated passes, inject
+session cookies from your own machine instead of typing passwords on a runner
+(navette's `/login` flow needs an interactive keychain, and a login from a
+datacenter IP invites captchas):
+
+1. On your Mac, log into the site with a local navette, then save the jar:
+   `POST /sessions/state {"session":"...","store":"DEVTO"}`
+2. Extract it from the keychain (the jar never leaves the daemon over HTTP —
+   the keychain is the exit door, and it's yours):
+   `security find-generic-password -s navette -a DEVTO -w > devto.json`
+3. Push it as a repo secret (one entry per site, wrappers or flat arrays):
+   ```
+   jq -n --slurpfile j devto.json '{"devto": $j[0]}' | gh secret set NAVETTE_STATES
+   ```
+4. Every scout now starts with that session loaded. Refresh the secret when
+   the site expires the session.
+
+Rules: dedicated automation accounts, never your primary ones. No interactive
+2FA on runners (app passwords if the site allows). A captcha mid-run is a
+reported result, never a bypass. Never put jars in issues, artifacts or plain
+variables — secrets only.

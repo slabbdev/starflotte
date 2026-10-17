@@ -102,6 +102,28 @@ jobs:
           docker logs navette
           exit 1
 
+      - name: seed session cookies (optional, from the NAVETTE_STATES secret)
+        if: steps.target.outputs.idle == '0'
+        env:
+          NAVETTE_STATES: ${{ secrets.NAVETTE_STATES }}
+        run: |
+          # NAVETTE_STATES = {"<label>": <jar>} where <jar> is either the flat
+          # cookies array or the full keychain wrapper ({"jar":{"cookies":[..]}}).
+          # Jars are imported into the daemon's default session; only counts
+          # are ever printed.
+          [ -n "$NAVETTE_STATES" ] || { echo "no NAVETTE_STATES secret — anonymous run"; exit 0; }
+          printf '%s' "$NAVETTE_STATES" | jq -c 'to_entries[]' | while read -r entry; do
+            label=$(jq -r '.key' <<<"$entry")
+            jq -c '.value.cookies // .value.jar.cookies // []' <<<"$entry" > /tmp/jar.json
+            n=$(jq 'length' /tmp/jar.json)
+            if [ "$n" -eq 0 ]; then echo "seeded $label: empty jar, skipped"; continue; fi
+            payload=$(jq -n --slurpfile c /tmp/jar.json '{cookies:$c[0]}')
+            imported=$(curl -s -m 60 -X POST http://127.0.0.1:8765/sessions/load \
+              -H 'Content-Type: application/json' -d "$payload" | jq -r '.imported // 0')
+            echo "seeded $label: $imported cookies"
+          done
+          rm -f /tmp/jar.json
+
       - name: run the mission
         if: steps.target.outputs.idle == '0'
         env:
